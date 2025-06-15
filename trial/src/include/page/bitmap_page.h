@@ -41,6 +41,7 @@ class BitmapPage {
   bool IsPageFreeLow(uint32_t byte_index, uint8_t bit_index) const;
 
   /** Note: need to update if modify page structure. */
+  /** here 2*size of pointer is used to store the page_allocated_ and next_free_page_ */
   static constexpr size_t MAX_CHARS = PageSize - 2 * sizeof(uint32_t);
 
  private:
