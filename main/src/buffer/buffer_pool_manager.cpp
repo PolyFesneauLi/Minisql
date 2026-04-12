@@ -24,54 +24,208 @@ BufferPoolManager::~BufferPoolManager() {
 
 /**
  * TODO: Student Implement
+ * @brief Fetch the requested page from buffer pool
+ * @param page_id The page ID to fetch
+ * @return Pointer to the requested page
  */
 Page *BufferPoolManager::FetchPage(page_id_t page_id) {
-  // 1.     Search the page table for the requested page (P).
-  // 1.1    If P exists, pin it and return it immediately.
-  // 1.2    If P does not exist, find a replacement page (R) from either the free list or the replacer.
-  //        Note that pages are always found from the free list first.
-  // 2.     If R is dirty, write it back to the disk.
-  // 3.     Delete R from the page table and insert P.
-  // 4.     Update P's metadata, read in the page content from disk, and then return a pointer to P.
-  return nullptr;
+  std::lock_guard<std::mutex> lock();
+
+  // 1. Search the page table for the requested page
+  auto it = page_table_.find(page_id);
+  if (it != page_table_.end()) {
+    // Page exists in buffer pool
+    frame_id_t frame_id = it->second;
+    Page *page = &pages_[frame_id];
+    page->pin_count_++;
+    replacer_->Pin(frame_id);
+    return page;
+  }
+
+  // 2. Page not in buffer pool, find a replacement frame
+  frame_id_t frame_id;
+  if (!free_list_.empty()) {
+    // Use frame from free list
+    frame_id = free_list_.front();
+    free_list_.pop_front();
+  } else {
+    // Try to get victim from replacer
+    if (!replacer_->Victim(&frame_id)) {
+      return nullptr;  // No free frames available
+    }
+    
+    // If victim page is dirty, write it back
+    Page *victim_page = &pages_[frame_id];
+    if (victim_page->is_dirty_) {
+      disk_manager_->WritePage(victim_page->GetPageId(), victim_page->GetData());
+    }
+    
+    // Remove victim from page table
+    page_table_.erase(victim_page->GetPageId());
+  }
+
+  // 3. Initialize the new page
+  Page *page = &pages_[frame_id];
+  page->page_id_ = page_id;
+  page->pin_count_ = 1;
+  page->is_dirty_ = false;
+  
+  // Read page content from disk
+  disk_manager_->ReadPage(page_id, page->data_);
+  
+  // Add to page table and pin in replacer
+  page_table_[page_id] = frame_id;
+  replacer_->Pin(frame_id);
+  
+  return page;
 }
 
 /**
  * TODO: Student Implement
+ * @brief Create a new page in buffer pool
+ * @param[out] page_id ID of the new page
+ * @return Pointer to the new page
  */
 Page *BufferPoolManager::NewPage(page_id_t &page_id) {
-  // 0.   Make sure you call AllocatePage!
-  // 1.   If all the pages in the buffer pool are pinned, return nullptr.
-  // 2.   Pick a victim page P from either the free list or the replacer. Always pick from the free list first.
-  // 3.   Update P's metadata, zero out memory and add P to the page table.
-  // 4.   Set the page ID output parameter. Return a pointer to P.
-  return nullptr;
+  std::lock_guard<std::mutex> lock();
+
+  // 1. Check if buffer pool has free frame
+  frame_id_t frame_id;
+  if (!free_list_.empty()) {
+    frame_id = free_list_.front();
+    free_list_.pop_front();
+  } else {
+    if (!replacer_->Victim(&frame_id)) {
+      return nullptr;  // No free frames
+    }
+    
+    // Write dirty victim page to disk
+    Page *victim_page = &pages_[frame_id];
+    if (victim_page->is_dirty_) {
+      disk_manager_->WritePage(victim_page->GetPageId(), victim_page->GetData());
+    }
+    
+    // Remove from page table
+    page_table_.erase(victim_page->GetPageId());
+  }
+
+  // 2. Allocate new page from disk
+  page_id = AllocatePage();
+  
+  // 3. Initialize the new page
+  Page *page = &pages_[frame_id];
+  page->page_id_ = page_id;
+  page->pin_count_ = 1;
+  page->is_dirty_ = false;
+  memcpy(page->data_, EMPTY_PAGE_DATA, PAGE_SIZE);
+  
+  // Add to page table and pin in replacer
+  page_table_[page_id] = frame_id;
+  replacer_->Pin(frame_id);
+  
+  return page;
 }
 
 /**
  * TODO: Student Implement
+ * @brief Delete a page from buffer pool
+ * @param page_id ID of the page to delete
+ * @return True if deletion succeeded, false otherwise
  */
 bool BufferPoolManager::DeletePage(page_id_t page_id) {
-  // 0.   Make sure you call DeallocatePage!
-  // 1.   Search the page table for the requested page (P).
-  // 1.   If P does not exist, return true.
-  // 2.   If P exists, but has a non-zero pin-count, return false. Someone is using the page.
-  // 3.   Otherwise, P can be deleted. Remove P from the page table, reset its metadata and return it to the free list.
-  return false;
+  std::lock_guard<std::mutex> lock();
+
+  // 1. Search page table
+  auto it = page_table_.find(page_id);
+  if (it == page_table_.end()) {
+    // Page not in buffer pool, deallocate from disk
+    DeallocatePage(page_id);
+    return true;
+  }
+
+  // 2. If page is pinned, cannot delete
+  frame_id_t frame_id = it->second;
+  Page *page = &pages_[frame_id];
+  if (page->pin_count_ > 0) {
+    return false;
+  }
+
+  // 3. Remove page from buffer pool
+  if (page->is_dirty_) {
+    disk_manager_->WritePage(page_id, page->GetData());
+  }
+  
+  // Reset page metadata
+  page->is_dirty_ = false;
+  page->pin_count_ = 0;
+  page->page_id_ = INVALID_PAGE_ID;
+  
+  // Remove from page table and add frame to free list
+  page_table_.erase(it);
+  free_list_.push_back(frame_id);
+  
+  // Deallocate from disk
+  DeallocatePage(page_id);
+  
+  return true;
 }
 
 /**
  * TODO: Student Implement
+ * @brief Unpin a page from buffer pool
+ * @param page_id ID of the page to unpin
+ * @param is_dirty Whether the page is dirty
+ * @return True if unpin succeeded, false otherwise
  */
 bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
-  return false;
+  std::lock_guard<std::mutex> lock();
+
+  auto it = page_table_.find(page_id);
+  if (it == page_table_.end()) {
+    return false;
+  }
+
+  frame_id_t frame_id = it->second;
+  Page *page = &pages_[frame_id];
+  
+  if (page->pin_count_ <= 0) {
+    return false;
+  }
+
+  page->pin_count_--;
+  if (is_dirty) {
+    page->is_dirty_ = true;
+  }
+
+  if (page->pin_count_ == 0) {
+    replacer_->Unpin(frame_id);
+  }
+
+  return true;
 }
 
 /**
  * TODO: Student Implement
+ * @brief Flush a page to disk
+ * @param page_id ID of the page to flush
+ * @return True if flush succeeded, false otherwise
  */
 bool BufferPoolManager::FlushPage(page_id_t page_id) {
-  return false;
+  std::lock_guard<std::mutex> lock();
+
+  auto it = page_table_.find(page_id);
+  if (it == page_table_.end()) {
+    return false;
+  }
+
+  frame_id_t frame_id = it->second;
+  Page *page = &pages_[frame_id];
+  
+  // Write page to disk
+  disk_manager_->WritePage(page_id, page->GetData());
+  page->is_dirty_ = false;
+  
+  return true;
 }
 
 page_id_t BufferPoolManager::AllocatePage() {

@@ -25,17 +25,89 @@ public:
     /**
     * TODO: Student Implement
     */
-    void Init(CheckPoint &last_checkpoint) {}
+    void Init(CheckPoint &last_checkpoint) {
+        // Initialize database state from checkpoint
+        data_ = last_checkpoint.persist_data_;
+        active_txns_ = last_checkpoint.active_txns_;
+        persist_lsn_ = last_checkpoint.checkpoint_lsn_;
+    }
 
     /**
     * TODO: Student Implement
     */
-    void RedoPhase() {}
+    void RedoPhase() {
+        // Redo all operations after checkpoint
+        for (const auto &[lsn, log_rec] : log_recs_) {
+            if (lsn <= persist_lsn_) {
+                continue;  // Skip logs before checkpoint
+            }
+
+            switch (log_rec->type_) {
+                case LogRecType::kInsert:
+                    data_[log_rec->key_] = log_rec->val_;
+                    break;
+                case LogRecType::kDelete:
+                    data_.erase(log_rec->key_);
+                    break;
+                case LogRecType::kUpdate:
+                    data_[log_rec->new_key_] = log_rec->new_val_;
+                    break;
+                case LogRecType::kBegin:
+                    active_txns_[log_rec->txn_id_] = log_rec->lsn_;
+                    break;
+                case LogRecType::kCommit:
+                case LogRecType::kAbort:
+                    active_txns_.erase(log_rec->txn_id_);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
 
     /**
     * TODO: Student Implement
     */
-    void UndoPhase() {}
+    void UndoPhase() {
+        // Undo active transactions in reverse order
+        while (!active_txns_.empty()) {
+            // Find the latest LSN among active transactions
+            lsn_t max_lsn = INVALID_LSN;
+            txn_id_t txn_to_undo = INVALID_TXN_ID;
+            
+            for (const auto &[txn_id, last_lsn] : active_txns_) {
+                if (last_lsn > max_lsn) {
+                    max_lsn = last_lsn;
+                    txn_to_undo = txn_id;
+                }
+            }
+
+            // Undo the transaction's operations
+            lsn_t current_lsn = max_lsn;
+            while (current_lsn != INVALID_LSN) {
+                auto log_rec = log_recs_[current_lsn];
+                
+                switch (log_rec->type_) {
+                    case LogRecType::kInsert:
+                        data_.erase(log_rec->key_);
+                        break;
+                    case LogRecType::kDelete:
+                        data_[log_rec->key_] = log_rec->val_;
+                        break;
+                    case LogRecType::kUpdate:
+                        data_[log_rec->key_] = log_rec->val_;
+                        break;
+                    default:
+                        break;
+                }
+                
+                current_lsn = log_rec->prev_lsn_;
+            }
+
+            // Remove transaction from active set
+            active_txns_.erase(txn_to_undo);
+        }
+    }
 
     // used for test only
     void AppendLogRec(LogRecPtr log_rec) { log_recs_.emplace(log_rec->lsn_, log_rec); }

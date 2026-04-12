@@ -1,0 +1,1 @@
+-ID:/Minisql/main/src/include -ID:/Minisql/main/test/include -ID:/Minisql/main/thirdparty/googletest/include -ID:/Minisql/main/thirdparty/glog/src -ID:/Minisql/main/thirdparty/glog/src/windows -I"D:/Minisql/main/build/glog-build"

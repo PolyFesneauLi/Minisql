@@ -341,70 +341,194 @@ dberr_t ExecuteEngine::ExecuteShowTables(pSyntaxNode ast, ExecuteContext *contex
  * TODO: Student Implement
  */
 dberr_t ExecuteEngine::ExecuteCreateTable(pSyntaxNode ast, ExecuteContext *context) {
-#ifdef ENABLE_EXECUTE_DEBUG
-  LOG(INFO) << "ExecuteCreateTable" << std::endl;
-#endif
-  return DB_FAILED;
+  if (current_db_.empty()) {
+    cout << "No database selected." << endl;
+    return DB_FAILED;
+  }
+
+  // Get table name
+  string table_name = ast->child_->val_;
+  
+  // Parse column definitions
+  vector<Column *> columns;
+  vector<string> primary_keys;
+  pSyntaxNode column_node = ast->child_->next_;
+  
+  while (column_node != nullptr) {
+    if (column_node->type_ == kNodeColumnDefinition) {
+      string column_name = column_node->child_->val_;
+      TypeId type;
+      uint32_t length = 0;
+      bool nullable = true;
+      bool unique = false;
+      
+      // Parse type
+      auto type_node = column_node->child_->next_;
+      if (strcmp(type_node->val_, "int") == 0) {
+        type = TypeId::kTypeInt;
+      } else if (strcmp(type_node->val_, "float") == 0) {
+        type = TypeId::kTypeFloat;
+      } else if (strcmp(type_node->val_, "char") == 0) {
+        type = TypeId::kTypeChar;
+        length = std::stoi(type_node->child_->val_);
+      }
+      
+      // Parse constraints
+      auto constraint_node = type_node->next_;
+      while (constraint_node != nullptr) {
+        if (constraint_node->type_ == kNodeColumnPrimaryKey) {
+          primary_keys.push_back(column_name);
+          nullable = false;
+        } else if (constraint_node->type_ == kNodeColumnUnique) {
+          unique = true;
+        } else if (constraint_node->type_ == kNodeColumnNullable) {
+          nullable = constraint_node->val_[0] == '1';
+        }
+        constraint_node = constraint_node->next_;
+      }
+      
+      // Create column
+      Column *column;
+      if (type == TypeId::kTypeChar) {
+        column = new Column(column_name, type, length, columns.size(), nullable, unique);
+      } else {
+        column = new Column(column_name, type, columns.size(), nullable, unique);
+      }
+      columns.push_back(column);
+    }
+    column_node = column_node->next_;
+  }
+  
+  // Create schema
+  Schema *schema = new Schema(columns);
+  
+  // Create table
+  dberr_t result = dbs_[current_db_]->CreateTable(table_name, schema);
+  if (result == DB_SUCCESS && !primary_keys.empty()) {
+    // Create primary key index
+    result = dbs_[current_db_]->CreateIndex(table_name, "PRIMARY_KEY", primary_keys, nullptr);
+  }
+  
+  return result;
 }
 
 /**
  * TODO: Student Implement
  */
 dberr_t ExecuteEngine::ExecuteDropTable(pSyntaxNode ast, ExecuteContext *context) {
-#ifdef ENABLE_EXECUTE_DEBUG
-  LOG(INFO) << "ExecuteDropTable" << std::endl;
-#endif
- return DB_FAILED;
+  if (current_db_.empty()) {
+    cout << "No database selected." << endl;
+    return DB_FAILED;
+  }
+
+  string table_name = ast->child_->val_;
+  return dbs_[current_db_]->DropTable(table_name);
 }
 
 /**
  * TODO: Student Implement
  */
 dberr_t ExecuteEngine::ExecuteShowIndexes(pSyntaxNode ast, ExecuteContext *context) {
-#ifdef ENABLE_EXECUTE_DEBUG
-  LOG(INFO) << "ExecuteShowIndexes" << std::endl;
-#endif
-  return DB_FAILED;
+  if (current_db_.empty()) {
+    cout << "No database selected." << endl;
+    return DB_FAILED;
+  }
+
+  string table_name = ast->child_->val_;
+  vector<IndexInfo *> indexes;
+  dberr_t result = dbs_[current_db_]->GetTableIndexes(table_name, indexes);
+  
+  if (result == DB_SUCCESS) {
+    cout << "Indexes for table " << table_name << ":" << endl;
+    for (auto index : indexes) {
+      cout << "  " << index->GetIndexName() << " (";
+      auto &key_schema = index->GetIndexKeySchema();
+      for (uint32_t i = 0; i < key_schema->GetColumnCount(); i++) {
+        if (i > 0) cout << ", ";
+        cout << key_schema->GetColumn(i)->GetName();
+      }
+      cout << ")" << endl;
+    }
+  }
+  
+  return result;
 }
 
 /**
  * TODO: Student Implement
  */
 dberr_t ExecuteEngine::ExecuteCreateIndex(pSyntaxNode ast, ExecuteContext *context) {
-#ifdef ENABLE_EXECUTE_DEBUG
-  LOG(INFO) << "ExecuteCreateIndex" << std::endl;
-#endif
-  return DB_FAILED;
+  if (current_db_.empty()) {
+    cout << "No database selected." << endl;
+    return DB_FAILED;
+  }
+
+  string table_name = ast->child_->val_;
+  string index_name = ast->child_->next_->val_;
+  
+  // Parse column names
+  vector<string> column_names;
+  pSyntaxNode column_node = ast->child_->next_->next_;
+  while (column_node != nullptr) {
+    column_names.push_back(column_node->val_);
+    column_node = column_node->next_;
+  }
+  
+  return dbs_[current_db_]->CreateIndex(table_name, index_name, column_names, nullptr);
 }
 
 /**
  * TODO: Student Implement
  */
 dberr_t ExecuteEngine::ExecuteDropIndex(pSyntaxNode ast, ExecuteContext *context) {
-#ifdef ENABLE_EXECUTE_DEBUG
-  LOG(INFO) << "ExecuteDropIndex" << std::endl;
-#endif
-  return DB_FAILED;
+  if (current_db_.empty()) {
+    cout << "No database selected." << endl;
+    return DB_FAILED;
+  }
+
+  string table_name = ast->child_->val_;
+  string index_name = ast->child_->next_->val_;
+  return dbs_[current_db_]->DropIndex(table_name, index_name);
 }
 
 dberr_t ExecuteEngine::ExecuteTrxBegin(pSyntaxNode ast, ExecuteContext *context) {
-#ifdef ENABLE_EXECUTE_DEBUG
-  LOG(INFO) << "ExecuteTrxBegin" << std::endl;
-#endif
+  if (current_db_.empty()) {
+    cout << "No database selected." << endl;
+    return DB_FAILED;
+  }
+  
+  context->txn_ = dbs_[current_db_]->Begin();
+  if (context->txn_ != nullptr) {
+    return DB_SUCCESS;
+  }
   return DB_FAILED;
 }
 
 dberr_t ExecuteEngine::ExecuteTrxCommit(pSyntaxNode ast, ExecuteContext *context) {
-#ifdef ENABLE_EXECUTE_DEBUG
-  LOG(INFO) << "ExecuteTrxCommit" << std::endl;
-#endif
+  if (current_db_.empty()) {
+    cout << "No database selected." << endl;
+    return DB_FAILED;
+  }
+  
+  if (context->txn_ != nullptr) {
+    dbs_[current_db_]->Commit(context->txn_);
+    context->txn_ = nullptr;
+    return DB_SUCCESS;
+  }
   return DB_FAILED;
 }
 
 dberr_t ExecuteEngine::ExecuteTrxRollback(pSyntaxNode ast, ExecuteContext *context) {
-#ifdef ENABLE_EXECUTE_DEBUG
-  LOG(INFO) << "ExecuteTrxRollback" << std::endl;
-#endif
+  if (current_db_.empty()) {
+    cout << "No database selected." << endl;
+    return DB_FAILED;
+  }
+  
+  if (context->txn_ != nullptr) {
+    dbs_[current_db_]->Abort(context->txn_);
+    context->txn_ = nullptr;
+    return DB_SUCCESS;
+  }
   return DB_FAILED;
 }
 
@@ -412,18 +536,40 @@ dberr_t ExecuteEngine::ExecuteTrxRollback(pSyntaxNode ast, ExecuteContext *conte
  * TODO: Student Implement
  */
 dberr_t ExecuteEngine::ExecuteExecfile(pSyntaxNode ast, ExecuteContext *context) {
-#ifdef ENABLE_EXECUTE_DEBUG
-  LOG(INFO) << "ExecuteExecfile" << std::endl;
-#endif
-  return DB_FAILED;
+  string file_name = ast->child_->val_;
+  ifstream file(file_name);
+  if (!file.is_open()) {
+    cout << "Failed to open file: " << file_name << endl;
+    return DB_FAILED;
+  }
+  
+  string line;
+  string sql;
+  while (getline(file, line)) {
+    // Skip empty lines and comments
+    if (line.empty() || line[0] == '#' || line[0] == '-') {
+      continue;
+    }
+    
+    sql += line;
+    if (line.back() == ';') {
+      // Execute SQL statement
+      YY_BUFFER_STATE buffer = yy_scan_string(sql.c_str());
+      if (yyparse() == 0) {
+        Execute(parse_tree);
+      }
+      sql.clear();
+    }
+  }
+  
+  file.close();
+  return DB_SUCCESS;
 }
 
 /**
  * TODO: Student Implement
  */
 dberr_t ExecuteEngine::ExecuteQuit(pSyntaxNode ast, ExecuteContext *context) {
-#ifdef ENABLE_EXECUTE_DEBUG
-  LOG(INFO) << "ExecuteQuit" << std::endl;
-#endif
- return DB_FAILED;
+  ASSERT(ast->type_ == kNodeQuit, "Unexpected node type.");
+  return DB_QUIT;
 }
